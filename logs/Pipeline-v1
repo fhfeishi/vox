@@ -1,0 +1,166 @@
+# voxapi/pipeline.py
+import json
+import asyncio
+from loguru import logger
+from voxapi.core.asr_api import StreamASR
+from voxapi.core.llm_api import QwenEngine
+from voxapi.core.tts_api import TTSEngine
+
+class SessionPipeline:
+    def __init__(self, websocket):
+        self.ws = websocket
+        self.state = "SLEEPING"  # 初始状态为休眠，等待唤醒
+        self.asr = StreamASR()
+        self.llm = QwenEngine()
+        self.tts = TTSEngine()
+        
+        self.router_task = None
+        self.llm_task = None
+        self.audio_task = None
+        self.current_voice = "default"
+
+    async def start(self):
+        self.state = "SLEEPING"
+        self.router_task = asyncio.create_task(self._message_router())
+        logger.info("🧠 [Pipeline] 管线已初始化，进入休眠待机模式 (等待语音唤醒)...")
+
+    async def process_audio(self, audio_data: bytes):
+        # 即使在休眠状态，也要保持 ASR 监听唤醒词
+        if self.state in ["LISTENING", "IDLE", "SLEEPING"]:
+            if not self.asr._running:
+                self.asr.start()
+            self.asr.send_audio(audio_data)
+
+    async def process_control(self, control_msg: str):
+        try:
+            data = json.loads(control_msg)
+            msg_type = data.get("type")
+            
+            if msg_type == "speech_start":
+                if self.state == "SLEEPING":
+                    return # 休眠时不要处理打断逻辑
+
+                if (self.llm_task and not self.llm_task.done()) or self.state == "SPEAKING":
+                    logger.warning("🛑 [Pipeline] 用户开口插话！强制截杀任务。")
+                    if self.llm_task: self.llm_task.cancel()
+                    if self.audio_task: self.audio_task.cancel()
+                    asyncio.create_task(self.ws.send_json({"type": "stop_audio"}))
+                    while not self.tts.audio_queue.empty():
+                        try: self.tts.audio_queue.get_nowait()
+                        except asyncio.QueueEmpty: break
+
+                self.state = "LISTENING"
+                if not self.asr._running:
+                    self.asr.start()
+                    
+            elif msg_type == "speech_end":
+                if self.asr._running:
+                    self.asr.send_audio(b'\x00' * 3200) 
+        except json.JSONDecodeError:
+            pass
+
+    async def _message_router(self):
+        while True:
+            try:
+                msg = await self.asr.msg_queue.get()
+                await self.ws.send_json(msg)
+                self.asr.msg_queue.task_done()
+
+                if msg["type"] == "asr_final":
+                    text = msg["text"]
+                    
+                    # ==========================================
+                    # 1. 休眠唤醒拦截 (无论初次开机还是关机后重开，都走这里)
+                    # ==========================================
+                    if self.state == "SLEEPING":
+                        wake_words = ["你好", "开机", "启动", "在吗", "百变"]
+                        if any(w in text.lower() for w in wake_words):
+                            logger.success("⏰ [Pipeline] 听到唤醒词，系统激活！")
+                            await self.ws.send_json({"type": "woken_up"})
+                            
+                            welcome_text = "你好啊，我是百变！我已经准备好了。你可以随时让我模仿别人的声音，或者克隆你自己的声音来聊天哦！"
+                            self.llm_task = asyncio.create_task(self._play_system_message(welcome_text))
+                        else:
+                            logger.debug(f"💤 [休眠中] 忽略杂音: {text}")
+                        continue
+
+                    logger.info(f"🤔 [Pipeline] 听到最终句: '{text}'")
+
+                    # ==========================================
+                    # 2. 关机指令拦截
+                    # ==========================================
+                    if "关机" in text or "退出" in text or "休息" in text:
+                        logger.warning("🛑 [Pipeline] 触发休眠关机指令！")
+                        if self.llm_task: self.llm_task.cancel()
+                        self.llm_task = asyncio.create_task(self._execute_shutdown())
+                        continue 
+
+                    # 正常交给大模型处理
+                    self.state = "THINKING"
+                    if self.llm_task and not self.llm_task.done():
+                        self.llm_task.cancel()
+                    self.llm_task = asyncio.create_task(self._run_llm_and_tts(text))
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Router 异常: {e}")
+
+    async def _audio_sender(self):
+        while True:
+            try:
+                audio_chunk = await self.tts.audio_queue.get()
+                if audio_chunk is None: break 
+                if self.state == "SPEAKING":
+                    await self.ws.send_bytes(audio_chunk)
+            except asyncio.CancelledError: break
+
+    async def _play_system_message(self, text: str):
+        self.state = "SPEAKING"
+        try:
+            await self.ws.send_json({"type": "llm_text", "text": text})
+            self.tts.start_session(self.current_voice)
+            self.audio_task = asyncio.create_task(self._audio_sender())
+            self.tts.send_text(text)
+            self.tts.finish_session()
+            if self.audio_task: await self.audio_task
+            self.state = "IDLE"
+        except asyncio.CancelledError: pass
+
+    async def _execute_shutdown(self):
+        await self._play_system_message("好的，百变这就去休息啦。想我的时候随时叫我开机哦，拜拜！")
+        await asyncio.sleep(3.5) # 给提示音留足播放时间
+        await self.ws.send_json({"type": "shutdown"}) 
+        # 🚀 核心修改：不再断开连接，而是将状态设为休眠，等待下一次唤醒
+        self.state = "SLEEPING"
+
+    async def _run_llm_and_tts(self, text: str):
+        self.state = "SPEAKING"
+        tts_started = False
+        try:
+            async for chunk in self.llm.generate_stream(text):
+                if chunk["type"] == "voice_ctrl":
+                    self.current_voice = chunk["target"]
+                    await self.ws.send_json({"type": "voice_changed", "voice": self.current_voice})
+                elif chunk["type"] == "text_chunk":
+                    if not tts_started:
+                        self.tts.start_session(self.current_voice)
+                        self.audio_task = asyncio.create_task(self._audio_sender())
+                        tts_started = True
+                    llm_text = chunk["text"]
+                    await self.ws.send_json({"type": "llm_text", "text": llm_text})
+                    self.tts.send_text(llm_text)
+            if tts_started:
+                self.tts.finish_session()
+                if self.audio_task: await self.audio_task 
+            self.state = "IDLE"
+        except asyncio.CancelledError:
+            if self.audio_task: self.audio_task.cancel()
+        except Exception as e:
+            logger.error(f"生成流异常: {e}")
+            self.state = "IDLE"
+
+    async def stop(self):
+        if self.router_task: self.router_task.cancel()
+        if self.llm_task: self.llm_task.cancel()
+        await self.asr.stop()

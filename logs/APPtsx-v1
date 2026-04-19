@@ -1,0 +1,251 @@
+// web/src/App.tsx
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useWebSocket } from './hooks/useWebSocket';
+import { useVADRecorder } from './hooks/useVADRecorder';
+
+function App() {
+  const [userSubtitle, setUserSubtitle] = useState("");
+  const [aiSubtitle, setAiSubtitle] = useState("");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [currentVoice, setCurrentVoice] = useState("default");
+  
+  // 状态机
+  const [isSleeping, setIsSleeping] = useState(true);
+  const [isShutDown, setIsShutDown] = useState(false);
+
+  // 模拟当前后端的音色库状态 (未来可以在 Phase 7 通过 WebSocket 动态拉取)
+  const availableVoices = [
+    { id: 'default', name: '百变 (默认)', status: '🟢 当前' },
+    { id: '晓燕', name: '晓燕 (活泼女声)', status: '✨ 就绪' },
+    { id: '马保国', name: '马保国 (浑厚男声)', status: '✨ 就绪' },
+    { id: 'speaker', name: '我的声音 (克隆)', status: '⏳ 待采集' },
+  ];
+
+  const playCtxRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
+
+  const playAudioChunk = useCallback((arrayBuffer: ArrayBuffer) => {
+    if (!playCtxRef.current) {
+      playCtxRef.current = new window.AudioContext({ sampleRate: 24000 });
+      nextPlayTimeRef.current = playCtxRef.current.currentTime; 
+    }
+    const audioCtx = playCtxRef.current;
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+
+    const int16Data = new Int16Array(arrayBuffer);
+    const float32Data = new Float32Array(int16Data.length);
+    for (let i = 0; i < int16Data.length; i++) {
+      float32Data[i] = int16Data[i] / 32768.0; 
+    }
+
+    const audioBuffer = audioCtx.createBuffer(1, float32Data.length, 24000);
+    audioBuffer.getChannelData(0).set(float32Data);
+
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+
+    const currentTime = audioCtx.currentTime;
+    if (nextPlayTimeRef.current < currentTime) {
+      nextPlayTimeRef.current = currentTime;
+    }
+    
+    source.start(nextPlayTimeRef.current);
+    nextPlayTimeRef.current += audioBuffer.duration;
+  }, []);
+
+  const stopAllAudio = useCallback(() => {
+    if (playCtxRef.current) {
+      playCtxRef.current.close(); 
+      playCtxRef.current = null;  
+    }
+    nextPlayTimeRef.current = 0;  
+  }, []);
+
+  const { isConnected, lastMessage, sendMessage } = useWebSocket(
+    'ws://localhost:8000/ws/chat', 
+    playAudioChunk 
+  );
+
+  const { isRecording, start } = useVADRecorder({
+    onAudioChunk: (chunk) => sendMessage(chunk.buffer),
+    onSpeechEvent: (eventType) => {
+      setIsSpeaking(eventType === 'speech_start');
+      sendMessage(JSON.stringify({ type: eventType })); 
+    }
+  });
+
+  useEffect(() => {
+    if (isConnected && !isRecording) {
+      start();
+    }
+  }, [isConnected, isRecording, start]);
+
+  useEffect(() => {
+    if (!lastMessage) return;
+
+    if (lastMessage.type === 'asr_partial' || lastMessage.type === 'asr_final') {
+      setUserSubtitle(lastMessage.text);
+      if (lastMessage.type === 'asr_partial' && aiSubtitle !== "") setAiSubtitle(""); 
+    } 
+    else if (lastMessage.type === 'llm_text') {
+      setAiSubtitle(prev => prev + (prev.endsWith(" ") ? "" : " ") + lastMessage.text);
+    }
+    else if (lastMessage.type === 'voice_changed') {
+      setCurrentVoice(lastMessage.voice);
+    }
+    else if (lastMessage.type === 'stop_audio') {
+      stopAllAudio();
+      setAiSubtitle(prev => prev + " 🛑 [被拦截]"); 
+    }
+    else if (lastMessage.type === 'woken_up') {
+      setIsSleeping(false);
+      setIsShutDown(false); 
+      setAiSubtitle(""); 
+    }
+    else if (lastMessage.type === 'shutdown') {
+      setIsShutDown(true);
+    }
+  }, [lastMessage, stopAllAudio]); 
+
+  // --- UI 组件级样式 ---
+  const glassPanelStyle = {
+    background: 'rgba(255, 255, 255, 0.4)',
+    backdropFilter: 'blur(16px)',
+    WebkitBackdropFilter: 'blur(16px)',
+    borderRadius: '24px',
+    border: '1px solid rgba(255, 255, 255, 0.5)',
+    boxShadow: '0 8px 32px rgba(31, 38, 135, 0.05)',
+    padding: '30px',
+    display: 'flex',
+    flexDirection: 'column' as const,
+  };
+
+  // --- 视图渲染 ---
+
+  // 1. 关机黑屏
+  if (isShutDown) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', backgroundColor: '#111418', color: '#ecf0f1', fontFamily: 'system-ui' }}>
+        <h2 style={{ marginBottom: '10px', letterSpacing: '2px', fontWeight: 300 }}>VOX / 深度休眠 (Standby)</h2>
+        <p style={{ color: '#7f8c8d', animation: 'pulse 2.5s infinite' }}>请说「百变开机」唤醒系统</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ 
+      display: 'flex', 
+      width: '100vw', 
+      height: '100vh', 
+      backgroundColor: '#f0f2f5', 
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      overflow: 'hidden',
+      color: '#2c3e50'
+    }}>
+      
+      {/* 休眠蒙版 (唤醒前全屏覆盖) */}
+      {isSleeping && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(240, 242, 245, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div style={{ fontSize: '48px', marginBottom: '24px', opacity: 0.8, animation: 'pulse 2s infinite' }}>✨</div>
+          <h1 style={{ margin: 0, fontWeight: 600, letterSpacing: '1px' }}>百变 (Bǎi Biàn) 已就绪</h1>
+          <p style={{ color: '#7f8c8d', marginTop: '16px', fontSize: '18px', fontWeight: 300 }}>
+            {isConnected ? "请直接对麦克风说：「你好」或「百变开机」" : "等待核心管线连接..."}
+          </p>
+          <div style={{ marginTop: '40px', padding: '8px 16px', borderRadius: '20px', backgroundColor: isConnected ? '#e8f5e9' : '#ffebee', color: isConnected ? '#2e7d32' : '#c62828', fontSize: '14px' }}>
+            WebSocket: {isConnected ? '已连接' : '未连接'}
+          </div>
+        </div>
+      )}
+
+      {/* 左侧边栏: 实时音色库 */}
+      <div style={{ width: '320px', padding: '24px', display: 'flex', flexDirection: 'column', zIndex: 10 }}>
+        <div style={{ ...glassPanelStyle, flex: 1 }}>
+          <h3 style={{ margin: '0 0 24px 0', fontSize: '16px', color: '#34495e', letterSpacing: '1px', textTransform: 'uppercase' }}>
+            <span style={{ marginRight: '8px' }}>🎙️</span> 实时音色库
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {availableVoices.map((v) => {
+              const isCurrent = v.id === currentVoice || (v.id === 'default' && currentVoice === 'default');
+              return (
+                <div key={v.id} style={{ 
+                  padding: '16px', 
+                  borderRadius: '16px', 
+                  backgroundColor: isCurrent ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.3)',
+                  border: isCurrent ? '1px solid #74b9ff' : '1px solid transparent',
+                  boxShadow: isCurrent ? '0 4px 12px rgba(116, 185, 255, 0.2)' : 'none',
+                  transition: 'all 0.3s ease'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontWeight: isCurrent ? 600 : 400, color: isCurrent ? '#0984e3' : '#2d3436' }}>{v.name}</span>
+                    <span style={{ fontSize: '12px', color: '#636e72', backgroundColor: 'rgba(0,0,0,0.04)', padding: '4px 8px', borderRadius: '10px' }}>
+                      {isCurrent ? '🟢 当前' : v.status}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 居中主控: 会话窗格 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', position: 'relative' }}>
+        <div style={{ position: 'absolute', top: '40px', display: 'flex', gap: '12px', opacity: 0.6 }}>
+           <span style={{ fontSize: '13px', background: 'rgba(0,0,0,0.05)', padding: '6px 12px', borderRadius: '20px' }}>端到端延迟: ~600ms</span>
+           <span style={{ fontSize: '13px', background: 'rgba(0,0,0,0.05)', padding: '6px 12px', borderRadius: '20px' }}>引擎: QwenTtsRealtime</span>
+        </div>
+
+        <div style={{ width: '100%', maxWidth: '800px', display: 'flex', flexDirection: 'column', gap: '24px', textAlign: 'center' }}>
+          {/* 用户输入映射 */}
+          <div style={{ fontSize: '22px', color: '#7f8c8d', minHeight: '34px', fontStyle: 'italic', fontWeight: 300 }}>
+            {userSubtitle || (isSleeping ? "" : "正在聆听...")}
+          </div>
+
+          {/* AI 输出响应 */}
+          <div style={{ fontSize: '36px', color: '#2d3436', minHeight: '120px', fontWeight: 600, lineHeight: '1.5', letterSpacing: '0.5px' }}>
+            {isSpeaking ? (
+              <span style={{ fontSize: '20px', color: '#e17055', fontWeight: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <span className="dot-pulse">●</span> 处理分析中...
+              </span>
+            ) : (
+              aiSubtitle
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 右侧边栏: 交互范式提示 */}
+      <div style={{ width: '320px', padding: '24px', display: 'flex', flexDirection: 'column', zIndex: 10 }}>
+        <div style={{ ...glassPanelStyle, flex: 1, backgroundColor: 'rgba(241, 242, 246, 0.4)' }}>
+           <h3 style={{ margin: '0 0 24px 0', fontSize: '16px', color: '#34495e', letterSpacing: '1px', textTransform: 'uppercase' }}>
+            <span style={{ marginRight: '8px' }}>💡</span> 交互范式
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontSize: '14px', lineHeight: '1.6', color: '#636e72' }}>
+            <p style={{ margin: 0 }}>您可以随时打断并使用自然语言下达控制指令，系统将自动进行意图解析与音色切换。</p>
+            
+            <div style={{ backgroundColor: 'rgba(255,255,255,0.6)', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ fontWeight: 600, color: '#2d3436', marginBottom: '8px' }}>💬 基础指令示例：</div>
+              <div>“百变，请用<strong style={{color: '#0984e3'}}>晓燕</strong>的声音给我讲个故事。”</div>
+            </div>
+
+            <div style={{ backgroundColor: 'rgba(255,255,255,0.6)', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ fontWeight: 600, color: '#2d3436', marginBottom: '8px' }}>👥 零样本克隆示例：</div>
+              <div>“接下来请用<strong style={{color: '#e17055'}}>我</strong>的声音回答，你觉得今天天气怎么样？”</div>
+            </div>
+
+            <div style={{ backgroundColor: 'rgba(255,255,255,0.6)', padding: '16px', borderRadius: '12px' }}>
+              <div style={{ fontWeight: 600, color: '#2d3436', marginBottom: '8px' }}>🛑 生命周期控制：</div>
+              <div>“太晚了，百变<strong style={{color: '#d63031'}}>请关机</strong>。”</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+export default App;

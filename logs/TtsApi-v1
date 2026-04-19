@@ -1,0 +1,87 @@
+# voxapi/core/tts_api.py
+# 发音人映射字典
+# self.voice_map = {
+#     "default": "ref_whgirl",  # 武汉女孩  预留音频文件：locals/refs/ref_wuhannv.wav  -> pcm ?
+#     "雷军": "ref_leijun",      # 人A  预留音频文件：locals/refs/ref_leijun.wav  -> pcm ?
+#     "易中天": "ref_yizhongtian",      # 人B 预留音频文件：locals/refs/ref_yizhongtian.wav  -> pcm ?
+#     "speaker": "speaker"   # 预留给克隆说话人  预留音频文件：locals/refs/debug_capture.pcm
+# }
+
+
+
+# voxapi/core/tts_api.py
+import base64
+import asyncio
+import dashscope
+from dashscope.audio.qwen_tts_realtime import QwenTtsRealtime, QwenTtsRealtimeCallback, AudioFormat
+from loguru import logger
+from configs.config import settings
+
+dashscope.api_key = settings.dashscope_api_key
+
+class TTSCallback(QwenTtsRealtimeCallback):
+    def __init__(self, audio_queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        self.audio_queue = audio_queue
+        self.loop = loop
+
+    def on_event(self, response: dict) -> None:
+        try:
+            event_type = response.get('type', '')
+            if event_type == 'response.audio.delta':
+                # 收到音频流块，解码并安全推入异步队列
+                audio_data = base64.b64decode(response['delta'])
+                self.loop.call_soon_threadsafe(self.audio_queue.put_nowait, audio_data)
+            elif event_type == 'session.finished':
+                # 会话结束，推入 None 作为结束标志
+                self.loop.call_soon_threadsafe(self.audio_queue.put_nowait, None)
+        except Exception as e:
+            logger.error(f"TTS 回调异常: {e}")
+
+    def on_error(self, error):
+        logger.error(f"TTS 报错: {error}")
+        self.loop.call_soon_threadsafe(self.audio_queue.put_nowait, None)
+
+class TTSEngine:
+    def __init__(self):
+        # 这里的 value 填入你在测试代码里创建的那些音色名
+        self.voice_map = {
+            "default": "Cherry",       # Flash 模型默认极速女声
+            "马保国": "announcer",      # 对应你设计的浑厚男声
+            "晓燕": "xiaoyan",         
+            "speaker": "Cherry"        # 未来换成通过 create_voice 生成的复刻 ID
+        }
+        self.qwen_tts = None
+        self.audio_queue = asyncio.Queue()
+        self.loop = asyncio.get_running_loop()
+
+    def start_session(self, voice_target: str):
+        """开启实时流式 TTS 会话"""
+        # 清空残留的队列
+        while not self.audio_queue.empty():
+            self.audio_queue.get_nowait()
+
+        voice_id = self.voice_map.get(voice_target, "Cherry")
+        logger.info(f"🎙️ [TTS] 启动 QwenTtsRealtime 会话，发音人: {voice_id}")
+
+        callback = TTSCallback(self.audio_queue, self.loop)
+        self.qwen_tts = QwenTtsRealtime(
+            model='qwen3-tts-flash-realtime', # 使用极速流式模型
+            callback=callback
+        )
+        self.qwen_tts.connect()
+        # 注意：这里设为 16000Hz 匹配我们前端的播放器设置！ # 24000
+        self.qwen_tts.update_session(
+            voice=voice_id,
+            response_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
+            mode='server_commit'
+        )
+
+    def send_text(self, text: str):
+        """追加流式文本进行合成"""
+        if self.qwen_tts:
+            self.qwen_tts.append_text(text)
+
+    def finish_session(self):
+        """通知引擎当前句子结束，等待最后音频吐出"""
+        if self.qwen_tts:
+            self.qwen_tts.finish()
