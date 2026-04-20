@@ -29,7 +29,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
     const cx = W / 2;
     const cy = H / 2;
 
-    // 粒子系统
     const particles = Array.from({ length: 80 }, () => ({
       angle: Math.random() * Math.PI * 2,
       radius: Math.random() * 3 + 0.5,
@@ -40,15 +39,12 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
 
     const render = () => {
       ctx.clearRect(0, 0, W, H);
-
-      // lerp 音量
       smoothedVolume.current += (volume - smoothedVolume.current) * 0.12;
       const v = smoothedVolume.current;
 
       const cfg = STATE_CONFIG[state as keyof typeof STATE_CONFIG] ?? STATE_CONFIG.IDLE;
       const color = cfg.color;
 
-      // 基础半径 & 脉动
       let baseR: number;
       const t = Date.now();
 
@@ -62,7 +58,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
         baseR = 68 + Math.sin(t / 1200) * 5;
       }
 
-      // 层1：远场大晕（深度感）
       const far = ctx.createRadialGradient(cx, cy, baseR * 0.2, cx, cy, baseR * 3.2);
       far.addColorStop(0, `${color}28`);
       far.addColorStop(0.5, `${color}10`);
@@ -72,7 +67,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
       ctx.arc(cx, cy, baseR * 3.2, 0, Math.PI * 2);
       ctx.fill();
 
-      // 层2：中场霓虹圈
       const mid = ctx.createRadialGradient(cx, cy, baseR * 0.6, cx, cy, baseR * 1.8);
       mid.addColorStop(0, `${color}50`);
       mid.addColorStop(0.6, `${color}22`);
@@ -82,7 +76,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
       ctx.arc(cx, cy, baseR * 1.8, 0, Math.PI * 2);
       ctx.fill();
 
-      // 层3：核心球体
       ctx.save();
       ctx.shadowBlur = 40;
       ctx.shadowColor = color;
@@ -96,7 +89,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
       ctx.fill();
       ctx.restore();
 
-      // 层4：高光点
       ctx.save();
       ctx.shadowBlur = 0;
       const hl = ctx.createRadialGradient(
@@ -111,7 +103,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
       ctx.fill();
       ctx.restore();
 
-      // 层5：轨道粒子
       ctx.save();
       ctx.shadowBlur = 8;
       ctx.shadowColor = color;
@@ -128,7 +119,6 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
       });
       ctx.restore();
 
-      // 思考时：旋转扫描弧
       if (state === 'THINKING') {
         ctx.save();
         ctx.strokeStyle = `${color}66`;
@@ -162,7 +152,7 @@ const VoiceOrb = ({ volume, state }: { volume: number; state: string }) => {
   );
 };
 
-// ─── 休眠屏幕 ────────────────────────────────────────────────────
+// ─── 休眠屏幕 (保持深邃神秘) ──────────────────────────────────────────
 const SleepScreen = ({ onWake }: { onWake: () => void }) => (
   <div className="sleep-screen" onClick={onWake}>
     <div className="sleep-inner">
@@ -177,13 +167,12 @@ const SleepScreen = ({ onWake }: { onWake: () => void }) => (
   </div>
 );
 
-// ─── 关机屏幕 ────────────────────────────────────────────────────
+// ─── 关机屏幕 (更干净、更暗) ────────────────────────────────────────
 const ShutdownScreen = () => (
   <div className="shutdown-screen">
     <div className="shutdown-inner">
-      <div className="shutdown-icon">◉</div>
-      <div className="shutdown-text">系统已离线</div>
-      <div className="shutdown-sub">百变已进入休眠</div>
+      <div className="shutdown-text">System Offline</div>
+      <div className="shutdown-sub">百变已断开连接</div>
     </div>
   </div>
 );
@@ -300,13 +289,12 @@ function App() {
       setIsSleeping(false);
       setSystemState('IDLE');
     } else if (type === 'voice_enrolled') {
-      // 克隆完成通知，可选UI反馈
+      // 克隆完成通知
     } else if (type === 'shutdown') {
       setIsShutDown(true);
     }
   }, [lastMessage]);
 
-  // TTS 音量采集
   useEffect(() => {
     let frame: number;
     const update = () => {
@@ -326,7 +314,6 @@ function App() {
     if (isConnected && !isRecording) start();
   }, [isConnected, isRecording, start]);
 
-  // AI 输出结束后存档
   useEffect(() => {
     if (systemState === 'IDLE' && currentAiLine) {
       setAiLines(prev => [...prev.slice(-3), currentAiLine]);
@@ -345,17 +332,24 @@ function App() {
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+        /* 🚀 核心修改：动态光影系统。开机时更亮，休眠/关机时极暗 */
         :root {
-          --bg: #070b12;
-          --bg2: #0d1520;
-          --border: rgba(255,255,255,0.06);
+          --bg: ${isSleeping || isShutDown ? '#030508' : '#0a111a'};
+          --bg-grid: ${isSleeping || isShutDown ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.03)'};
+          --border: rgba(255,255,255,0.08);
           --text: #e2e8f0;
-          --text-dim: #4a5568;
+          --text-dim: #64748b;
           --font-display: 'Noto Serif SC', serif;
           --font-mono: 'JetBrains Mono', monospace;
         }
 
-        body { background: var(--bg); color: var(--text); font-family: var(--font-mono); overflow: hidden; }
+        body { 
+          background: var(--bg); 
+          color: var(--text); 
+          font-family: var(--font-mono); 
+          overflow: hidden; 
+          transition: background 1.5s ease; /* 背景亮度平滑过渡 */
+        }
 
         /* ── 背景网格 ── */
         .app {
@@ -371,57 +365,66 @@ function App() {
           position: fixed;
           inset: 0;
           background-image:
-            linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+            linear-gradient(var(--bg-grid) 1px, transparent 1px),
+            linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
           background-size: 40px 40px;
           pointer-events: none;
           z-index: 0;
+          transition: background-image 1.5s ease;
         }
 
         /* ── 侧栏 ── */
         .sidebar {
-          padding: 28px 20px;
+          padding: 32px 24px;
           border-right: 1px solid var(--border);
           display: flex;
           flex-direction: column;
-          gap: 16px;
+          gap: 20px;
           position: relative;
           z-index: 1;
+          background: linear-gradient(90deg, rgba(0,0,0,0.2) 0%, transparent 100%);
         }
-        .sidebar.right { border-right: none; border-left: 1px solid var(--border); }
+        .sidebar.right { 
+          border-right: none; 
+          border-left: 1px solid var(--border);
+          background: linear-gradient(-90deg, rgba(0,0,0,0.2) 0%, transparent 100%);
+        }
 
         .panel {
-          background: rgba(255,255,255,0.03);
-          border: 1px solid var(--border);
+          background: rgba(255,255,255,0.02);
+          border: 1px solid rgba(255,255,255,0.05);
           border-radius: 12px;
-          padding: 18px;
+          padding: 20px;
+          box-shadow: 0 4px 20px rgba(0,0,0,0.2);
         }
         .panel-title {
-          font-size: 9px;
-          letter-spacing: 0.2em;
+          font-size: 11px;
+          letter-spacing: 0.25em;
           color: var(--text-dim);
           text-transform: uppercase;
-          margin-bottom: 14px;
+          margin-bottom: 16px;
         }
 
+        /* 🚀 核心修改：侧边栏文字适当放大 */
         /* 音色列表 */
-        .voice-list { display: flex; flex-direction: column; gap: 6px; }
+        .voice-list { display: flex; flex-direction: column; gap: 8px; }
         .voice-chip {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 10px 12px;
+          gap: 12px;
+          padding: 12px 14px;
           border-radius: 8px;
-          font-size: 13px;
+          font-size: 15px; /* 调大 */
           color: var(--text-dim);
           border: 1px solid transparent;
           transition: all 0.25s;
           cursor: default;
         }
         .voice-chip.active {
-          background: rgba(255,255,255,0.06);
-          border-color: var(--border);
+          background: rgba(255,255,255,0.08);
+          border-color: rgba(255,255,255,0.15);
           color: var(--text);
+          box-shadow: 0 0 15px rgba(255,255,255,0.05);
         }
         .voice-chip-dot {
           width: 6px; height: 6px;
@@ -432,7 +435,7 @@ function App() {
         }
         .voice-chip.active .voice-chip-dot {
           background: #00f5a0;
-          box-shadow: 0 0 6px #00f5a0;
+          box-shadow: 0 0 8px #00f5a0;
         }
 
         /* ── 中央区域 ── */
@@ -451,18 +454,18 @@ function App() {
         .status-row {
           display: flex;
           align-items: center;
-          gap: 8px;
-          margin-bottom: 4px;
+          gap: 10px;
+          margin-bottom: 10px;
         }
         .status-dot {
-          width: 7px; height: 7px;
+          width: 8px; height: 8px;
           border-radius: 50%;
           flex-shrink: 0;
           animation: dotPulse 2s ease-in-out infinite;
         }
         .status-label {
-          font-size: 11px;
-          letter-spacing: 0.15em;
+          font-size: 12px;
+          letter-spacing: 0.2em;
           color: var(--text-dim);
           text-transform: uppercase;
         }
@@ -477,19 +480,19 @@ function App() {
           display: flex;
           align-items: center;
           justify-content: center;
-          margin: -20px 0;
+          margin: -10px 0;
         }
 
         /* ── 文字区域 ── */
         .text-zone {
           width: 100%;
-          max-width: 580px;
+          max-width: 600px;
           display: flex;
           flex-direction: column;
           align-items: center;
           gap: 0;
           padding: 0 20px;
-          min-height: 160px;
+          min-height: 180px;
         }
 
         /* 用户输入区 */
@@ -497,33 +500,33 @@ function App() {
           align-self: flex-end;
           max-width: 85%;
           text-align: right;
-          padding: 10px 16px;
-          background: rgba(255,255,255,0.04);
-          border: 1px solid rgba(255,255,255,0.08);
+          padding: 12px 18px;
+          background: rgba(255,255,255,0.03);
+          border: 1px solid rgba(255,255,255,0.05);
           border-radius: 16px 16px 4px 16px;
-          font-size: 14px;
+          font-size: 16px;
           color: #a0aec0;
           font-family: var(--font-display);
           font-weight: 300;
-          letter-spacing: 0.02em;
+          letter-spacing: 0.03em;
           line-height: 1.6;
           transition: opacity 0.4s;
-          margin-bottom: 12px;
+          margin-bottom: 16px;
         }
-        .user-bubble.typing { border-color: rgba(0,245,160,0.25); }
+        .user-bubble.typing { border-color: rgba(0,245,160,0.3); }
         .user-bubble:empty { display: none; }
 
         /* AI 输出区 */
         .ai-bubble {
           align-self: flex-start;
-          max-width: 92%;
+          max-width: 95%;
           text-align: left;
-          padding: 14px 20px;
+          padding: 16px 24px;
           font-family: var(--font-display);
-          font-size: 22px;
+          font-size: 24px;
           font-weight: 300;
-          letter-spacing: 0.03em;
-          line-height: 1.7;
+          letter-spacing: 0.04em;
+          line-height: 1.8;
           color: var(--text);
           position: relative;
         }
@@ -531,61 +534,39 @@ function App() {
           content: '';
           position: absolute;
           left: 0;
-          top: 6px;
-          bottom: 6px;
-          width: 2px;
-          border-radius: 2px;
+          top: 8px;
+          bottom: 8px;
+          width: 3px;
+          border-radius: 3px;
           background: var(--accent-color, #4a5568);
-          box-shadow: 0 0 8px var(--accent-color, #4a5568);
+          box-shadow: 0 0 12px var(--accent-color, #4a5568);
           transition: background 0.5s, box-shadow 0.5s;
         }
         .ai-bubble:empty { display: none; }
 
-        /* 历史记录（渐隐）*/
+        /* 历史记录 */
         .ai-history {
-          font-size: 14px;
+          font-size: 15px;
           color: var(--text-dim);
           align-self: flex-start;
-          padding: 4px 20px;
+          padding: 6px 24px;
           font-family: var(--font-display);
           font-weight: 300;
-          letter-spacing: 0.02em;
+          letter-spacing: 0.03em;
           line-height: 1.6;
-          border-left: 1px solid var(--border);
-          margin-bottom: 8px;
-          margin-left: 0;
+          border-left: 2px solid rgba(255,255,255,0.05);
+          margin-bottom: 12px;
           max-width: 90%;
         }
-
-        /* 光标 */
-        .cursor {
-          display: inline-block;
-          width: 2px; height: 1.1em;
-          background: currentColor;
-          margin-left: 3px;
-          vertical-align: middle;
-          animation: blink 1s step-end infinite;
-        }
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-
-        /* 提示 */
-        .hint {
-          font-size: 12px;
-          color: var(--text-dim);
-          letter-spacing: 0.05em;
-          margin-top: 8px;
-          animation: float 3s ease-in-out infinite;
-        }
-        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 
         /* ── 右侧 Guide ── */
         .guide-item {
           display: flex;
-          gap: 10px;
+          gap: 12px;
           align-items: flex-start;
-          padding: 10px 0;
-          border-bottom: 1px solid var(--border);
-          font-size: 12px;
+          padding: 12px 0;
+          border-bottom: 1px solid rgba(255,255,255,0.05);
+          font-size: 14px; /* 调大 */
           color: var(--text-dim);
           line-height: 1.6;
         }
@@ -593,133 +574,83 @@ function App() {
         .guide-cmd {
           color: var(--text);
           font-family: var(--font-display);
-          font-size: 13px;
+          font-size: 15px; /* 调大 */
           display: block;
-          margin-bottom: 2px;
+          margin-bottom: 4px;
         }
-        .guide-icon { flex-shrink: 0; margin-top: 2px; }
-
-        /* 连接指示 */
-        .conn-badge {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 10px;
-          letter-spacing: 0.1em;
-          color: var(--text-dim);
-          text-transform: uppercase;
-        }
-        .conn-dot {
-          width: 5px; height: 5px;
-          border-radius: 50%;
-        }
-        .conn-dot.on { background: #00f5a0; box-shadow: 0 0 6px #00f5a0; }
-        .conn-dot.off { background: #fc5c65; }
 
         /* ── 休眠屏幕 ── */
         .sleep-screen {
           position: fixed; inset: 0;
-          background: #070b12;
+          background: #030508; /* 极暗 */
           display: flex; align-items: center; justify-content: center;
           z-index: 200;
           cursor: pointer;
-          overflow: hidden;
         }
         .sleep-inner {
           position: relative;
           display: flex; flex-direction: column;
           align-items: center; justify-content: center;
-          gap: 16px;
+          gap: 20px;
         }
         .sleep-ring {
           position: absolute;
-          width: 240px; height: 240px;
+          width: 280px; height: 280px;
           border-radius: 50%;
-          border: 1px solid rgba(0,245,160,0.15);
-          animation: sleepExpand 3s ease-out infinite;
+          border: 1px solid rgba(0,245,160,0.1);
+          animation: sleepExpand 4s ease-out infinite;
         }
-        .sleep-ring.delay1 { animation-delay: 1s; }
-        .sleep-ring.delay2 { animation-delay: 2s; }
+        .sleep-ring.delay1 { animation-delay: 1.3s; }
+        .sleep-ring.delay2 { animation-delay: 2.6s; }
         @keyframes sleepExpand {
-          0%   { transform: scale(0.8); opacity: 0.6; }
-          100% { transform: scale(2.5); opacity: 0; }
+          0%   { transform: scale(0.8); opacity: 0.5; }
+          100% { transform: scale(2.8); opacity: 0; }
         }
         .sleep-title {
           font-family: var(--font-display);
-          font-size: 52px;
+          font-size: 64px;
           font-weight: 300;
           letter-spacing: 0.3em;
           color: #e2e8f0;
           margin-right: -0.3em;
-          text-shadow: 0 0 40px rgba(0,245,160,0.3);
+          text-shadow: 0 0 50px rgba(0,245,160,0.2);
         }
         .sleep-sub {
-          font-size: 12px;
-          letter-spacing: 0.15em;
+          font-size: 13px;
+          letter-spacing: 0.2em;
           color: #4a5568;
           text-transform: uppercase;
         }
-        .sleep-tap {
-          font-size: 11px;
-          color: #2d3748;
-          letter-spacing: 0.1em;
-          margin-top: 8px;
-          animation: float 3s ease-in-out infinite;
-        }
-        .scanline {
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 2px;
-          background: linear-gradient(90deg, transparent, rgba(0,245,160,0.3), transparent);
-          animation: scan 4s linear infinite;
-          pointer-events: none;
-        }
-        @keyframes scan {
-          0%   { top: 0; opacity: 0; }
-          5%   { opacity: 1; }
-          95%  { opacity: 1; }
-          100% { top: 100%; opacity: 0; }
-        }
 
         /* ── 关机屏幕 ── */
+        /* 🚀 核心修改：去除繁杂动画，回归纯粹深渊 */
         .shutdown-screen {
           position: fixed; inset: 0;
-          background: #070b12;
+          background: #020305; /* 比休眠更暗 */
           display: flex; align-items: center; justify-content: center;
           z-index: 200;
         }
         .shutdown-inner {
           display: flex; flex-direction: column;
-          align-items: center; gap: 16px;
-          animation: shutdownFade 1.5s ease forwards;
+          align-items: center; gap: 12px;
+          opacity: 0.4;
         }
-        @keyframes shutdownFade {
-          0% { opacity: 0; transform: scale(0.95); }
-          100% { opacity: 1; transform: scale(1); }
-        }
-        .shutdown-icon {
-          font-size: 36px;
-          color: #2d3748;
-          animation: shutdownPulse 3s ease-in-out infinite;
-        }
-        @keyframes shutdownPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.7; } }
         .shutdown-text {
-          font-family: var(--font-display);
-          font-size: 24px;
-          font-weight: 300;
-          letter-spacing: 0.2em;
+          font-family: var(--font-mono);
+          font-size: 18px;
+          letter-spacing: 0.4em;
           color: #4a5568;
+          text-transform: uppercase;
         }
         .shutdown-sub {
-          font-size: 11px;
-          letter-spacing: 0.1em;
+          font-size: 10px;
+          letter-spacing: 0.2em;
           color: #2d3748;
-          text-transform: uppercase;
         }
       `}</style>
 
       {isShutDown ? <ShutdownScreen /> : null}
-      {isSleeping ? <SleepScreen onWake={() => setIsSleeping(false)} /> : null}
+      {isSleeping && !isShutDown ? <SleepScreen onWake={() => setIsSleeping(false)} /> : null}
 
       <div className="app">
         {/* ── 左侧栏 ── */}
@@ -744,9 +675,9 @@ function App() {
 
           <div style={{ flex: 1 }} />
 
-          <div className="conn-badge" style={{ paddingBottom: 8 }}>
-            <span className={`conn-dot ${isConnected ? 'on' : 'off'}`} />
-            {isConnected ? 'Connected' : 'Offline'}
+          <div className="conn-badge" style={{ paddingBottom: 8, fontSize: '11px', color: 'var(--text-dim)', display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <span className="conn-dot" style={{ width: 6, height: 6, borderRadius: '50%', background: isConnected ? '#00f5a0' : '#fc5c65', boxShadow: isConnected ? '0 0 8px #00f5a0' : 'none' }} />
+            {isConnected ? 'SYSTEM ONLINE' : 'DISCONNECTED'}
           </div>
         </div>
 
@@ -759,50 +690,47 @@ function App() {
           </div>
 
           <div className="text-zone">
-            {/* AI 历史（最近1条，渐隐） */}
             {aiLines.length > 0 && (
               <div className="ai-history">
                 {aiLines[aiLines.length - 1]}
               </div>
             )}
 
-            {/* 用户当前发言 */}
             {(currentUserLine || userLines.length > 0) && (
               <div className={`user-bubble ${currentUserLine ? 'typing' : ''}`}>
                 {currentUserLine || userLines[userLines.length - 1]}
-                {currentUserLine && <span className="cursor" />}
+                {currentUserLine && <span className="cursor" style={{display: 'inline-block', width: 2, height: '1.2em', background: 'currentColor', marginLeft: 4, verticalAlign: 'middle', animation: 'blink 1s step-end infinite'}} />}
               </div>
             )}
 
-            {/* AI 当前输出 */}
             {currentAiLine ? (
               <div
                 className="ai-bubble"
                 style={{ '--accent-color': cfg.color } as React.CSSProperties}
               >
                 {currentAiLine}
-                <span className="cursor" />
+                <span className="cursor" style={{display: 'inline-block', width: 3, height: '1.2em', background: 'currentColor', marginLeft: 6, verticalAlign: 'middle', animation: 'blink 1s step-end infinite'}} />
               </div>
             ) : systemState === 'LISTENING' ? (
-              <div className="hint">请说话…</div>
+              <div style={{fontSize: 14, color: 'var(--text-dim)', letterSpacing: '0.1em', marginTop: 12, animation: 'float 3s ease-in-out infinite'}}>请说话…</div>
             ) : systemState === 'THINKING' ? (
-              <div className="hint" style={{ color: '#00d2ff' }}>思考中…</div>
+              <div style={{fontSize: 14, color: '#00d2ff', letterSpacing: '0.1em', marginTop: 12, animation: 'float 3s ease-in-out infinite'}}>逻辑解算中…</div>
             ) : null}
           </div>
         </div>
 
         {/* ── 右侧栏 ── */}
         <div className="sidebar right">
-          <div className="panel-title">使用指南</div>
+          <div className="panel-title">Interactive Guide</div>
 
           <div className="panel">
             {[
-              { icon: '🎙', cmd: '"用雷军的声音说"', desc: '切换克隆音色对话' },
-              { icon: '🔄', cmd: '"换个声音说话"', desc: 'AI 自动选择音色' },
-              { icon: '💤', cmd: '"百变休息"', desc: '进入休眠模式' },
+              { icon: '🎙', cmd: '"用雷军的声音说"', desc: '触发目标音色克隆对话' },
+              { icon: '🔄', cmd: '"换个声音说话"', desc: '由 AI 自动指派适合音色' },
+              { icon: '💤', cmd: '"百变休息"', desc: '切断输出并进入待机休眠' },
             ].map((g, i) => (
               <div key={i} className="guide-item">
-                <span className="guide-icon">{g.icon}</span>
+                <span style={{flexShrink: 0, marginTop: 2}}>{g.icon}</span>
                 <div>
                   <span className="guide-cmd">{g.cmd}</span>
                   {g.desc}
@@ -813,11 +741,11 @@ function App() {
 
           <div style={{ flex: 1 }} />
 
-          <div className="panel" style={{ fontSize: 11, color: 'var(--text-dim)', lineHeight: 1.7 }}>
-            <div className="panel-title">System</div>
+          <div className="panel" style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.8, fontFamily: 'var(--font-mono)' }}>
+            <div className="panel-title">Telemetry</div>
             <div>Model: qwen3-tts-vc</div>
-            <div>ASR: streaming</div>
-            <div>VAD: active</div>
+            <div>ASR: paraformer-realtime</div>
+            <div>VAD: Active (Always-on)</div>
           </div>
         </div>
       </div>
