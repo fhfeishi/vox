@@ -7,7 +7,7 @@
 *.m4a
 
 # --- Python 相关 ---
-__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 .venv/

@@ -58,7 +58,7 @@ class StreamASR:
         
         self._debug_audio = debug_audio
         self._debug_bytes = 0
-        self._debug_path = "locals/ref/debug_capture.pcm"
+        self._debug_path = "locals/refs/debug_capture.pcm"
         self._debug_file = None
 
     def start(self):
