@@ -8,6 +8,8 @@
 *-text:Zone.Identifier
 *:Zone.Identifier
 *.Identifier
+**/voice_cache.json
+
 
 # --- Python 相关 ---
 **/__pycache__/
