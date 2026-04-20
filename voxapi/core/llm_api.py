@@ -12,7 +12,7 @@ dashscope.api_key = settings.dashscope_api_key
 class QwenEngine:
     def __init__(self):
         self.system_prompt = (
-            "你是一个名为 VOX 的实时语音助手。交互规则：\n"
+            "你是一个名为 百变 的实时语音助手。交互规则：\n"
             "1. 你的回复将被直接转为语音朗读，所以**必须极其口语化、简短**。\n"
             "2. **绝对禁止**使用 Markdown 格式（如 *、#、-、代码块等），数字尽量用汉字表达（如“三个”）。\n"
             "3. 如果用户的提问明确要求“换个声音”、“用某某的声音”、“模仿我说话”，你必须在回复的最开头输出控制帧 `[VOICE_CTRL: {\"target\": \"音色名\"}]`，然后再输出回复正文。\n"

@@ -34,3 +34,6 @@ tmp/
 *.log
 dist/
 build/
+
+# --- Node.js 相关 ---
+**/package-lock.json
