@@ -5,7 +5,9 @@
 *.mp4
 *.raw
 *.m4a
-* -text:Zone.Identifier
+*-text:Zone.Identifier
+*:Zone.Identifier
+*.Identifier
 
 # --- Python 相关 ---
 **/__pycache__/
