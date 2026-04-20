@@ -1,5 +1,5 @@
 // web/src/App.tsx
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useVADRecorder } from './hooks/useVADRecorder';
 
@@ -161,18 +161,24 @@ const SleepScreen = ({ onWake }: { onWake: () => void }) => (
       <div className="sleep-ring delay2" />
       <div className="sleep-title">百变</div>
       <div className="sleep-sub">说「你好」或「百变开机」以唤醒</div>
-      <div className="sleep-tap">点击任意处继续</div>
+      <div className="sleep-tap">点击屏幕任意处强制唤醒</div>
     </div>
     <div className="scanline" />
   </div>
 );
 
-// ─── 关机屏幕 (更干净、更暗) ────────────────────────────────────────
+// ─── 关机屏幕 (高级待机舱风格) ────────────────────────────────────────
 const ShutdownScreen = () => (
   <div className="shutdown-screen">
     <div className="shutdown-inner">
+      <div className="shutdown-orb" />
       <div className="shutdown-text">System Offline</div>
-      <div className="shutdown-sub">百变已断开连接</div>
+      <div className="shutdown-sub">百变已进入深度休眠</div>
+      
+      <div className="shutdown-hint">
+        💡 想要再次交流？<br/>
+        请直接对我说：<span className="highlight">「百变开机」</span>或<span className="highlight">「你好」</span>
+      </div>
     </div>
   </div>
 );
@@ -203,13 +209,19 @@ function App() {
   const playCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-
+  // 🚀 新增：关机定时器引用，用于随时拦截
+  const shutdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 音色别名反向映射 (用于前端展示)
   const VOICE_NAMES: Record<string, string> = {
-    default: '默认音色',
+    default: '默认女声 (Cherry)',
     leijun: '雷军',
     yizhongtian: '易中天',
     shuji: '书记',
-    speaker: '我的声音',
+    wuhannvhai: '武汉女孩',
+    speaker: '我的专属声音',
+    男声: '默认男声 (Ethan)',
+    女声: '默认女声 (Cherry)',
   };
 
   const playAudioChunk = useCallback((arrayBuffer: ArrayBuffer) => {
@@ -258,6 +270,34 @@ function App() {
     },
   });
 
+  // 🛡️ 核心优化：前端防卡死看门狗 (Watchdog)
+  useEffect(() => {
+    let watchdogTimer: NodeJS.Timeout;
+
+    if (systemState === 'THINKING') {
+      watchdogTimer = setTimeout(() => {
+        console.warn("⚠️ [Watchdog] API 响应超时！强行恢复互动状态以避免死锁。");
+        
+        if (playCtxRef.current) {
+          playCtxRef.current.close();
+          playCtxRef.current = null;
+        }
+        
+        setAiLines(prev => [...prev.slice(-2), "⚠️ 网络信号似乎开小差了，能再说一遍吗？"]);
+        setCurrentAiLine("");
+        setSystemState('LISTENING');
+        
+        // 向后端发送假信号，触发后端的截杀清理逻辑
+        sendMessage(JSON.stringify({ type: "speech_start" })); 
+        
+      }, 12000); 
+    }
+
+    return () => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+    };
+  }, [systemState, sendMessage]);
+
   useEffect(() => {
     if (!lastMessage) return;
     const type = lastMessage.type;
@@ -286,12 +326,37 @@ function App() {
       }
       setSystemState('LISTENING');
     } else if (type === 'woken_up') {
+      // 🚀 核心逻辑：如果系统在准备关机时，用户突然喊了“开机”，立刻拦截关机动作！
+      if (shutdownTimerRef.current) {
+        clearTimeout(shutdownTimerRef.current);
+        shutdownTimerRef.current = null;
+      }
       setIsSleeping(false);
+      setIsShutDown(false); 
       setSystemState('IDLE');
     } else if (type === 'voice_enrolled') {
-      // 克隆完成通知
+      // 克隆完成通知 (未来可接入 UI 反馈)
     } else if (type === 'shutdown') {
-      setIsShutDown(true);
+      // 🚀 终极时序优化：前端根据 Web Audio API 精准计算剩余播放时间
+      let delay = 0;
+      if (playCtxRef.current) {
+        const now = playCtxRef.current.currentTime;
+        const end = nextPlayTimeRef.current;
+        if (end > now) {
+          delay = (end - now) * 1000; // 换算成毫秒
+        }
+      }
+      
+      // 设置定时器：等音频正好播完，加上 800ms 的自然停顿缓冲，然后优雅黑屏
+      shutdownTimerRef.current = setTimeout(() => {
+        setIsShutDown(true);
+        // 顺手把界面的对话记录清理干净，保证下次开机清清爽爽
+        setCurrentAiLine('');
+        setCurrentUserLine('');
+        setAiLines([]);
+        setUserLines([]);
+        setSystemState('IDLE');
+      }, delay + 800); 
     }
   }, [lastMessage]);
 
@@ -323,18 +388,15 @@ function App() {
 
   const cfg = STATE_CONFIG[systemState as keyof typeof STATE_CONFIG] ?? STATE_CONFIG.IDLE;
 
-  if (isShutDown) return <ShutdownScreen />;
-
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400&family=JetBrains+Mono:wght@300;400&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;600&family=JetBrains+Mono:wght@300;400&display=swap');
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        /* 🚀 核心修改：动态光影系统。开机时更亮，休眠/关机时极暗 */
         :root {
-          --bg: ${isSleeping || isShutDown ? '#030508' : '#0a111a'};
+          --bg: ${isSleeping || isShutDown ? '#020305' : '#0a111a'};
           --bg-grid: ${isSleeping || isShutDown ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.03)'};
           --border: rgba(255,255,255,0.08);
           --text: #e2e8f0;
@@ -348,10 +410,9 @@ function App() {
           color: var(--text); 
           font-family: var(--font-mono); 
           overflow: hidden; 
-          transition: background 1.5s ease; /* 背景亮度平滑过渡 */
+          transition: background 1.5s ease;
         }
 
-        /* ── 背景网格 ── */
         .app {
           display: grid;
           grid-template-columns: 260px 1fr 260px;
@@ -373,7 +434,6 @@ function App() {
           transition: background-image 1.5s ease;
         }
 
-        /* ── 侧栏 ── */
         .sidebar {
           padding: 32px 24px;
           border-right: 1px solid var(--border);
@@ -405,8 +465,6 @@ function App() {
           margin-bottom: 16px;
         }
 
-        /* 🚀 核心修改：侧边栏文字适当放大 */
-        /* 音色列表 */
         .voice-list { display: flex; flex-direction: column; gap: 8px; }
         .voice-chip {
           display: flex;
@@ -414,7 +472,7 @@ function App() {
           gap: 12px;
           padding: 12px 14px;
           border-radius: 8px;
-          font-size: 15px; /* 调大 */
+          font-size: 15px; 
           color: var(--text-dim);
           border: 1px solid transparent;
           transition: all 0.25s;
@@ -438,7 +496,6 @@ function App() {
           box-shadow: 0 0 8px #00f5a0;
         }
 
-        /* ── 中央区域 ── */
         .main {
           display: flex;
           flex-direction: column;
@@ -450,7 +507,6 @@ function App() {
           overflow: hidden;
         }
 
-        /* 状态行 */
         .status-row {
           display: flex;
           align-items: center;
@@ -474,7 +530,6 @@ function App() {
           50% { opacity: 0.4; }
         }
 
-        /* 光球容器 */
         .orb-wrap {
           position: relative;
           display: flex;
@@ -483,7 +538,6 @@ function App() {
           margin: -10px 0;
         }
 
-        /* ── 文字区域 ── */
         .text-zone {
           width: 100%;
           max-width: 600px;
@@ -495,7 +549,6 @@ function App() {
           min-height: 180px;
         }
 
-        /* 用户输入区 */
         .user-bubble {
           align-self: flex-end;
           max-width: 85%;
@@ -516,7 +569,6 @@ function App() {
         .user-bubble.typing { border-color: rgba(0,245,160,0.3); }
         .user-bubble:empty { display: none; }
 
-        /* AI 输出区 */
         .ai-bubble {
           align-self: flex-start;
           max-width: 95%;
@@ -544,7 +596,6 @@ function App() {
         }
         .ai-bubble:empty { display: none; }
 
-        /* 历史记录 */
         .ai-history {
           font-size: 15px;
           color: var(--text-dim);
@@ -559,14 +610,13 @@ function App() {
           max-width: 90%;
         }
 
-        /* ── 右侧 Guide ── */
         .guide-item {
           display: flex;
           gap: 12px;
           align-items: flex-start;
           padding: 12px 0;
           border-bottom: 1px solid rgba(255,255,255,0.05);
-          font-size: 14px; /* 调大 */
+          font-size: 14px; 
           color: var(--text-dim);
           line-height: 1.6;
         }
@@ -574,7 +624,7 @@ function App() {
         .guide-cmd {
           color: var(--text);
           font-family: var(--font-display);
-          font-size: 15px; /* 调大 */
+          font-size: 15px; 
           display: block;
           margin-bottom: 4px;
         }
@@ -582,7 +632,7 @@ function App() {
         /* ── 休眠屏幕 ── */
         .sleep-screen {
           position: fixed; inset: 0;
-          background: #030508; /* 极暗 */
+          background: #030508; 
           display: flex; align-items: center; justify-content: center;
           z-index: 200;
           cursor: pointer;
@@ -622,33 +672,71 @@ function App() {
           text-transform: uppercase;
         }
 
-        /* ── 关机屏幕 ── */
-        /* 🚀 核心修改：去除繁杂动画，回归纯粹深渊 */
+        /* 🚀 关机屏幕：科技感待机舱风格 */
         .shutdown-screen {
           position: fixed; inset: 0;
-          background: #020305; /* 比休眠更暗 */
+          background: #020305; 
           display: flex; align-items: center; justify-content: center;
           z-index: 200;
         }
         .shutdown-inner {
           display: flex; flex-direction: column;
-          align-items: center; gap: 12px;
-          opacity: 0.4;
+          align-items: center; gap: 16px;
+          text-align: center;
+          animation: fadeDown 1.5s ease-out forwards;
+        }
+        @keyframes fadeDown {
+          0% { opacity: 0; transform: translateY(-20px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        .shutdown-orb {
+          width: 12px; height: 12px;
+          border-radius: 50%;
+          background: #4a5568;
+          box-shadow: 0 0 15px #4a5568;
+          margin-bottom: 8px;
+          animation: dimPulse 4s ease-in-out infinite;
+        }
+        @keyframes dimPulse {
+          0%, 100% { opacity: 0.2; transform: scale(0.8); }
+          50% { opacity: 0.8; transform: scale(1.2); }
         }
         .shutdown-text {
           font-family: var(--font-mono);
-          font-size: 18px;
-          letter-spacing: 0.4em;
-          color: #4a5568;
+          font-size: 24px; 
+          letter-spacing: 0.5em;
+          color: #64748b;
           text-transform: uppercase;
+          margin-right: -0.5em;
         }
         .shutdown-sub {
-          font-size: 10px;
-          letter-spacing: 0.2em;
-          color: #2d3748;
+          font-size: 13px;
+          letter-spacing: 0.3em;
+          color: #334155;
+          text-transform: uppercase;
         }
+        .shutdown-hint {
+          margin-top: 40px;
+          font-size: 18px; 
+          color: #94a3b8;
+          letter-spacing: 0.1em;
+          line-height: 1.8;
+          background: rgba(255,255,255,0.02);
+          padding: 24px 40px;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.05);
+          box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+          animation: float 4s ease-in-out infinite;
+        }
+        .shutdown-hint .highlight {
+          color: #00f5a0;
+          font-weight: 600;
+          opacity: 0.9;
+        }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
       `}</style>
 
+      {/* 状态遮罩层 */}
       {isShutDown ? <ShutdownScreen /> : null}
       {isSleeping && !isShutDown ? <SleepScreen onWake={() => setIsSleeping(false)} /> : null}
 
@@ -660,12 +748,13 @@ function App() {
           <div className="panel">
             <div className="voice-list">
               {[
-                { key: 'default', label: '默认音色' },
+                { key: 'default', label: '默认女声 (Cherry)' },
+                { key: '男声', label: '默认男声 (Ethan)' },
                 { key: 'leijun', label: '雷军' },
                 { key: 'yizhongtian', label: '易中天' },
-                { key: 'speaker', label: '我的声音' },
+                { key: 'speaker', label: '我的专属声音' },
               ].map(v => (
-                <div key={v.key} className={`voice-chip ${currentVoice === v.key ? 'active' : ''}`}>
+                <div key={v.key} className={`voice-chip ${currentVoice === v.key || (v.key==='男声' && currentVoice==='龙老铁') ? 'active' : ''}`}>
                   <span className="voice-chip-dot" />
                   {v.label}
                 </div>
@@ -687,6 +776,10 @@ function App() {
 
           <div className="orb-wrap">
             <VoiceOrb volume={visualVolume} state={systemState} />
+          </div>
+
+          <div style={{ fontSize: 13, color: 'var(--text-dim)', marginBottom: 8, letterSpacing: '0.1em', fontFamily: 'var(--font-display)' }}>
+            正在使用音色：<span style={{ color: '#00f5a0', fontWeight: 600 }}>{VOICE_NAMES[currentVoice] || currentVoice}</span>
           </div>
 
           <div className="text-zone">
@@ -726,8 +819,8 @@ function App() {
           <div className="panel">
             {[
               { icon: '🎙', cmd: '"用雷军的声音说"', desc: '触发目标音色克隆对话' },
-              { icon: '🔄', cmd: '"换个声音说话"', desc: '由 AI 自动指派适合音色' },
-              { icon: '💤', cmd: '"百变休息"', desc: '切断输出并进入待机休眠' },
+              { icon: '🔄', cmd: '"换个男声说话"', desc: '由 AI 自动指派适合音色' },
+              { icon: '💤', cmd: '"百变关机"', desc: '切断输出并进入深度休眠' },
             ].map((g, i) => (
               <div key={i} className="guide-item">
                 <span style={{flexShrink: 0, marginTop: 2}}>{g.icon}</span>
@@ -746,6 +839,7 @@ function App() {
             <div>Model: qwen3-tts-vc</div>
             <div>ASR: paraformer-realtime</div>
             <div>VAD: Active (Always-on)</div>
+            <div>Watchdog: Armed (12s)</div>
           </div>
         </div>
       </div>

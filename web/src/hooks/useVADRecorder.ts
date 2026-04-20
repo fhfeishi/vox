@@ -14,7 +14,13 @@ export function useVADRecorder({ onAudioChunk, onSpeechEvent }: VADOptions) {
   const start = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true } 
+        audio: { 
+          channelCount: 1, 
+          sampleRate: 16000, 
+          echoCancellation: true, 
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
       });
       mediaStreamRef.current = stream;
       
