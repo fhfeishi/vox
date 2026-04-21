@@ -17,18 +17,13 @@ class Settings(BaseSettings):
     voxcpm2_path : str=""
     voxcpm15_path: str=""
 
-    class Config:
-        case_sensitive = True
-
+    # Pydantic V2 的标准配置写法
     model_config = SettingsConfigDict(
         env_file='configs/.env',
         env_file_encoding='utf-8',
-        extra='allow'
+        extra='ignore'  # 建议改成 ignore，如果有未定义的变量直接忽略，不报错
+        # case_sensitive=False # 默认就是 False，不需要写，这样才能让小写的 key 匹配大写的 ENV
     )
-    # .env examples:
-    # DASHSCOPE_API_KEY=sk-12356xxxx
     
-
 # 全局唯一实例
 settings = Settings()
-
