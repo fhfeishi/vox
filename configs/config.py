@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ## voxcpm
     voxcpm2_path : str=""
     voxcpm15_path: str=""
+    voxcpm05_path: str=""
 
     # Pydantic V2 的标准配置写法
     model_config = SettingsConfigDict(
