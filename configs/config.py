@@ -7,16 +7,13 @@ class Settings(BaseSettings):
     
     # dashscope 
     dashscope_api_key: str = ""
-    
-    # class Config:
-    #     env_file="configs/.env"
-    #     env_file_encoding="utf-8"
+
     model_config = SettingsConfigDict(
         env_file='configs/.env',
         env_file_encoding='utf-8',
-        extra='allow'  # ✅ 允许任意额外字段
+        extra='allow'
     )
-    # .env info:
+    # .env examples:
     # DASHSCOPE_API_KEY=sk-12356xxxx
     
 
