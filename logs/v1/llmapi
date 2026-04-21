@@ -2,18 +2,15 @@
 import re
 import json
 import asyncio
-from openai import AsyncOpenAI
+import dashscope
+from dashscope import Generation
 from loguru import logger
 from configs.config import settings
 
+dashscope.api_key = settings.dashscope_api_key
 
 class QwenEngine:
     def __init__(self):
-        # 🚀 核心优化：使用通义千问兼容的 OpenAI 接口协议，实现纯正的 async for 原生异步流
-        self.client = AsyncOpenAI(
-            api_key=settings.dashscope_api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-        )
         self.system_prompt = (
             "你是一个名为 百变 的实时语音助手。交互规则：\n"
             "1. 你的回复将被直接转为语音朗读，所以**必须极其口语化、简短**。\n"
@@ -33,22 +30,33 @@ class QwenEngine:
         messages.append({'role': 'user', 'content': text})
 
         try:
-            # 原生异步请求，彻底释放 Event Loop
-            response = await self.client.chat.completions.create(
-                model="qwen-turbo",
-                messages=messages,
-                stream=True,
-                stream_options={"include_usage": False}
-            )
+            def _make_sync_call():
+                return Generation.call(
+                    model='qwen-turbo',
+                    messages=messages,
+                    result_format='message',
+                    stream=True,
+                    incremental_output=True
+                )
+
+            responses = await asyncio.to_thread(_make_sync_call)
 
             buffer = ""
             is_first_chunk = True
 
-            async for chunk in response:
-                if not chunk.choices: continue
-                delta = chunk.choices[0].delta.content
-                if not delta: continue
+            while True:
+                # 🚀 修复核心：传入 None 作为默认值，防止抛出 StopIteration
+                response = await asyncio.to_thread(next, responses, None)
 
+                # 如果返回 None，说明生成器已经遍历结束，安全退出循环
+                if response is None:
+                    break
+
+                if response.status_code != 200:
+                    logger.error(f"LLM API 错误: {response.message}")
+                    continue
+
+                delta = response.output.choices[0].message.content
                 buffer += delta
 
                 # ==========================================
@@ -58,7 +66,7 @@ class QwenEngine:
                     if buffer.startswith("[VOICE_CTRL"):
                         if "]" in buffer:
                             try:
-                                json_str = buffer[buffer.find("{"):buffer.find("}") + 1]
+                                json_str = buffer[buffer.find("{"):buffer.find("}")+1]
                                 ctrl_data = json.loads(json_str)
                                 target = ctrl_data.get("target", "default")
 
@@ -67,7 +75,7 @@ class QwenEngine:
                             except Exception as e:
                                 logger.warning(f"⚠️ 解析 VOICE_CTRL 失败: {e}")
 
-                            buffer = buffer[buffer.find("]") + 1:].lstrip()
+                            buffer = buffer[buffer.find("]")+1:].lstrip()
                             is_first_chunk = False
                         else:
                             continue
@@ -75,7 +83,7 @@ class QwenEngine:
                         is_first_chunk = False
 
                 # ==========================================
-                # 标点切片：组装句子推给 TTS
+                # 标点切片：组装句子
                 # ==========================================
                 if not is_first_chunk:
                     match = self.punctuation_pattern.search(buffer)
@@ -89,35 +97,36 @@ class QwenEngine:
 
                         match = self.punctuation_pattern.search(buffer)
 
+            # 兜底：输出 buffer 里最后残留的文本
             if buffer.strip():
                 yield {"type": "text_chunk", "text": buffer.strip()}
 
-        except asyncio.CancelledError:
-            # 正常打断，直接抛出让上层处理
-            raise
         except Exception as e:
-            logger.error(f"LLM API 生成异常: {e}")
+            logger.error(f"LLM 生成异常: {e}")
 
 
 # ==========================================
-# 🧪 模块独立测试用例 (直接运行此文件)
+# 🧪 本地独立测试模块
 # ==========================================
 if __name__ == "__main__":
     async def test_llm():
         engine = QwenEngine()
+
         test_prompts = [
             "武汉有什么好吃的？简单说两句。",
-            "用雷军的声音回答我，Are you ok怎么翻译？"
+            "用马保国的声音回答我，你觉得年轻人应该怎么做？"
         ]
+
         for prompt in test_prompts:
             print(f"\n🗣️ User: {prompt}")
             print("-" * 40)
+
             async for chunk in engine.generate_stream(prompt):
                 if chunk["type"] == "voice_ctrl":
                     print(f"⚙️ [控制信号拦截] 准备将声音切换为 -> {chunk['target']}")
                 elif chunk["type"] == "text_chunk":
                     print(f"📦 [文本切片送往TTS] -> {chunk['text']}")
-            print("-" * 40)
 
+            print("-" * 40)
 
     asyncio.run(test_llm())

@@ -5,6 +5,9 @@ import numpy as np
 from funasr import AutoModel
 from loguru import logger
 
+from configs.config import settings
+
+
 # 全局单例模型，避免每次 WebSocket 连接都重新加载几百MB的模型
 _GLOBAL_ASR_MODEL = None
 

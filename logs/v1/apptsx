@@ -149,8 +149,8 @@ function App() {
   const playCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
-  const shutdownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+  const shutdownTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   // 🚀 核心阀门：控制音频帧是否允许进入播放器，过滤打断后的幽灵残余帧
   const isAudioAllowedRef = useRef<boolean>(false);
 
@@ -166,7 +166,7 @@ function App() {
   };
 
   const playAudioChunk = useCallback((arrayBuffer: ArrayBuffer) => {
-    // 🚀 1. 物理隔离阀门：如果在关机、聆听、打断等状态，直接丢弃收到的二进制数据
+    // 🚀 如果阀门关闭，直接丢弃此帧，防止诈尸
     if (!isAudioAllowedRef.current) return;
 
     if (!playCtxRef.current) {
@@ -190,13 +190,7 @@ function App() {
     source.connect(analyserRef.current!);
 
     const now = audioCtx.currentTime;
-
-    // 🚀 2. 时间轴修正：如果下一帧的计划时间已经落后于当前硬件时间，立刻重置为当前时间
-    // 防止因为短暂的渲染卡顿导致音频在未来某个奇怪的时间点才播放
-    if (nextPlayTimeRef.current < now) {
-      nextPlayTimeRef.current = now;
-    }
-
+    if (nextPlayTimeRef.current < now) nextPlayTimeRef.current = now;
     source.start(nextPlayTimeRef.current);
     nextPlayTimeRef.current += buf.duration;
   }, []);
@@ -205,10 +199,7 @@ function App() {
 
   const { isRecording, start } = useVADRecorder({
     onAudioChunk: (chunk) => {
-      // chunk 是 Float32Array， 它的 .buffer 属性在 TS 里属性在 TS 里的严格类型是 ArrayBufferLike
-      // 而 sendMessage 函数参数严格要求 string | ArrayBuffer
-      // sendMessage(chunk.buffer);  //  chunk.buffer类型不匹配
-      sendMessage(chunk.buffer as ArrayBuffer);
+      sendMessage(chunk.buffer);
       let sum = 0;
       for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i];
       const rms = Math.sqrt(sum / chunk.length);
@@ -221,16 +212,16 @@ function App() {
   });
 
   useEffect(() => {
-    let watchdogTimer: ReturnType<typeof setTimeout>;
+    let watchdogTimer: NodeJS.Timeout;
     if (systemState === 'THINKING') {
       watchdogTimer = setTimeout(() => {
         isAudioAllowedRef.current = false; // 触发看门狗时关闭音频阀门
         if (playCtxRef.current) { playCtxRef.current.close(); playCtxRef.current = null; }
-        nextPlayTimeRef.current = 0; 
+        nextPlayTimeRef.current = 0;
         setAiLines(prev => [...prev.slice(-2), "⚠️ 网络信号似乎开小差了，能再说一遍吗？"]);
         setCurrentAiLine(""); setSystemState('LISTENING');
-        sendMessage(JSON.stringify({ type: "speech_start" })); 
-      }, 12000); 
+        sendMessage(JSON.stringify({ type: "speech_start" }));
+      }, 12000);
     }
     return () => { if (watchdogTimer) clearTimeout(watchdogTimer); };
   }, [systemState, sendMessage]);
@@ -240,62 +231,47 @@ function App() {
     const type = lastMessage.type;
 
     if (type === 'asr_partial') {
-      // 在上一步中把 lastMessage 的类型定义成了 WSMessage，它的 text 和 voice 是可选属性（string | undefined）。但是 React 的状态更新函数（如 setCurrentUserLine）要求必须传入明确的 string。
-      // 解法：使用短路或运算符 || '' 提供空字符串兜底。
-      setCurrentUserLine(lastMessage.text || '');
-    }
-    else if (type === 'asr_final') {
-      // 🚀 闭阀：用户说出完整句子，准备发给大模型了，此时绝对不允许再播放上一个问题的残留音频
-      isAudioAllowedRef.current = false;
-      const finalText = lastMessage.text || '';
+      setCurrentUserLine(lastMessage.text);
+    } else if (type === 'asr_final') {
+      isAudioAllowedRef.current = false; // 🚀 用户说出完整新问题时，关闭阀门拒绝上轮旧音频
+      const finalText = lastMessage.text;
       setUserLines(prev => [...prev.slice(-3), finalText]);
       setCurrentUserLine(''); setCurrentAiLine(''); setSystemState('THINKING');
-    }
-    else if (type === 'llm_text') {
-      // 🚀 开阀：大模型开始生成新回复，此时的音频才是合法的新音频
-      isAudioAllowedRef.current = true;
-      setCurrentAiLine(prev => prev + (lastMessage.text || '')); setSystemState('SPEAKING');
-    }
-    else if (type === 'voice_changed') {
-      setCurrentVoice(lastMessage.voice || 'default');
-    }
-    // ⬇️ 下面三个是【状态重置指令】，必须执行“三连清理”
-    else if (type === 'stop_audio' || type === 'woken_up') {
-      isAudioAllowedRef.current = false; // 1. 关阀门
+    } else if (type === 'llm_text') {
+      isAudioAllowedRef.current = true;  // 🚀 大模型生成新文本时，打开阀门允许播放
+      setCurrentAiLine(prev => prev + lastMessage.text); setSystemState('SPEAKING');
+    } else if (type === 'voice_changed') {
+      setCurrentVoice(lastMessage.voice);
+    } else if (type === 'stop_audio') {
+      isAudioAllowedRef.current = false; // 🚀 收到打断指令，立刻关阀门
       if (playCtxRef.current) {
-          playCtxRef.current.close().catch(() => {}); // 2. 销毁上下文
+          playCtxRef.current.close();
           playCtxRef.current = null;
       }
       analyserRef.current = null;
-      nextPlayTimeRef.current = 0; // 🚀 3. 时间轴彻底归零！
-
-      if (type === 'stop_audio') {
-        if (currentAiLine) { setAiLines(prev => [...prev.slice(-3), currentAiLine]); setCurrentAiLine(''); }
-        setSystemState('LISTENING');
-      } else {
-        if (shutdownTimerRef.current) { clearTimeout(shutdownTimerRef.current); shutdownTimerRef.current = null; }
-        setIsSleeping(false); setIsShutDown(false); setSystemState('IDLE');
-      }
-    }
-    else if (type === 'shutdown') {
+      nextPlayTimeRef.current = 0;
+      if (currentAiLine) { setAiLines(prev => [...prev.slice(-3), currentAiLine]); setCurrentAiLine(''); }
+      setSystemState('LISTENING');
+    } else if (type === 'woken_up') {
+      isAudioAllowedRef.current = false;
+      if (shutdownTimerRef.current) { clearTimeout(shutdownTimerRef.current); shutdownTimerRef.current = null; }
+      if (playCtxRef.current) { playCtxRef.current.close(); playCtxRef.current = null; }
+      analyserRef.current = null;
+      nextPlayTimeRef.current = 0;
+      setIsSleeping(false); setIsShutDown(false); setSystemState('IDLE');
+    } else if (type === 'shutdown') {
       let delay = 0;
       if (playCtxRef.current) {
-        const now = playCtxRef.current.currentTime;
-        if (nextPlayTimeRef.current > now) delay = (nextPlayTimeRef.current - now) * 1000;
+        const now = playCtxRef.current.currentTime; const end = nextPlayTimeRef.current;
+        if (end > now) delay = (end - now) * 1000;
       }
       shutdownTimerRef.current = setTimeout(() => {
-        setIsShutDown(true);
-        // 关机彻底结束后，再次执行三连清理
-        isAudioAllowedRef.current = false;
-        if (playCtxRef.current) { playCtxRef.current.close().catch(() => {}); playCtxRef.current = null; }
-        analyserRef.current = null;
-        nextPlayTimeRef.current = 0;
-
-        setCurrentAiLine(''); setCurrentUserLine('');
+        setIsShutDown(true); setCurrentAiLine(''); setCurrentUserLine('');
         setAiLines([]); setUserLines([]); setSystemState('IDLE');
-      }, delay + 500); // 等待最后一句关机提示音播完再加上 500ms 余量
+        nextPlayTimeRef.current = 0;
+      }, delay + 800);
     }
-  }, [lastMessage, currentAiLine]);
+  }, [lastMessage]);
 
   useEffect(() => {
     let frame: number;
@@ -317,10 +293,9 @@ function App() {
 
   useEffect(() => {
     if (systemState === 'IDLE' && currentAiLine) {
-      setAiLines(prev => [...prev.slice(-3), currentAiLine]);
-      setCurrentAiLine('');
+      setAiLines(prev => [...prev.slice(-3), currentAiLine]); setCurrentAiLine('');
     }
-  }, [systemState, currentAiLine]);
+  }, [systemState]);
 
   const cfg = STATE_CONFIG[systemState as keyof typeof STATE_CONFIG] ?? STATE_CONFIG.IDLE;
 
