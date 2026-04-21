@@ -116,6 +116,7 @@ class SessionPipeline:
                 if msg["type"] == "asr_partial":
                     text = msg.get("text", "")
                     clean_text = re.sub(r'[^\w\s]', '', text).strip()
+                    # 🚀 只在正常的说话/思考状态允许打断，开机关机状态绝对免疫！
                     if len(clean_text) >= 2 and self.state in ["SPEAKING", "THINKING"]:
                         logger.warning(f"🛑 [Pipeline] 语义打断生效：听到人类语音 '{clean_text}'")
                         await self._cancel_output()
@@ -123,6 +124,10 @@ class SessionPipeline:
                     continue
 
                 if msg["type"] != "asr_final": continue
+
+                # 🚀 屏蔽无意义追问：如果系统正在关机或开机中，丢弃干扰指令
+                if self.state in ["SHUTTING_DOWN", "WAKING_UP"]:
+                    continue
 
                 text: str = msg["text"]
                 logger.info(f"📝 [ASR] 识别结果: {text!r}")
@@ -135,16 +140,17 @@ class SessionPipeline:
                 if self.state == "SLEEPING":
                     if any(w in text for w in ["百变", "你好", "开机"]):
                         logger.success("⏰ [Pipeline] 检测到唤醒词！")
-                        self.state = "IDLE"
+                        self.state = "WAKING_UP" # 🚀 开启开机护盾
                         await self.ws.send_json({"type": "woken_up"})
                         welcome = "你好啊，我是百变！我已经准备好了，你可以让我模仿雷军、易中天，或者你自己的声音哦。"
                         self.llm_task = asyncio.create_task(self._play_system_message(welcome))
                     continue
 
-                # 🚀 修复点 1：安全拦截关机！先掐断所有对话，再执行纯粹的关机任务。
                 if any(w in text for w in ["关机", "退出", "休息"]):
-                    await self._cancel_output() # 先彻底打扫干净屋子
-                    self.llm_task = asyncio.create_task(self._execute_shutdown()) # 再执行关机
+                    logger.info("🛑 [Pipeline] 收到关机指令，准备休眠...")
+                    # 🚀 绝对修复：把清理动作放在任务启动【前】，防止关机任务自杀
+                    await self._cancel_output()
+                    self.llm_task = asyncio.create_task(self._execute_shutdown())
                     continue
 
                 await self._cancel_output()
@@ -176,12 +182,12 @@ class SessionPipeline:
             try:
                 chunk = await self.tts.audio_queue.get()
                 if chunk is None: break
-                if self.state == "SPEAKING":
+                # 🚀 允许过渡态（护盾状态）向前端发送音频
+                if self.state in ["SPEAKING", "SHUTTING_DOWN", "WAKING_UP"]:
                     await self.ws.send_bytes(chunk)
             except asyncio.CancelledError: break
 
     async def _play_system_message(self, text: str):
-        self.state = "SPEAKING"
         try:
             await self.ws.send_json({"type": "llm_text", "text": text})
             await self.tts.start_session(self.current_voice)
@@ -192,12 +198,12 @@ class SessionPipeline:
                 await self.audio_task
         except asyncio.CancelledError: pass
         finally: 
-            if self.state in ["SPEAKING", "THINKING"]:
+            if self.state == "WAKING_UP":
                 self.state = "IDLE"
 
     async def _execute_shutdown(self):
-        # 🚀 修复点 2：绝不在这里调用 await self._cancel_output()！
-        # 否则关机任务会触发连环自杀！
+        # 🚀 绝不在这里调用 self._cancel_output()！
+        self.state = "SHUTTING_DOWN" # 开启关机护盾
         await asyncio.sleep(0.2)
         
         male_voices = ["男声", "男的", "男生", "龙老铁", "雷军", "leijun", "易中天", "yizhongtian", "书记", "shuji"]
@@ -205,16 +211,22 @@ class SessionPipeline:
         cache_key = "shutdown_male" if is_male else "shutdown_female"
         
         if cache_key in self.system_audio_cache:
-            self.state = "SPEAKING"
             await self.ws.send_json({"type": "llm_text", "text": "好的，百变这就去休息啦。随时叫我，拜拜！"})
             pcm_bytes = self.system_audio_cache[cache_key]
             chunk_size = 4800 
             for i in range(0, len(pcm_bytes), chunk_size):
                 await self.ws.send_bytes(pcm_bytes[i:i+chunk_size])
                 await asyncio.sleep(0.09) 
-            self.state = "IDLE"
         else:
-            await self._play_system_message("好的，百变这就去休息啦。随时叫我，拜拜！")
+            try:
+                await self.ws.send_json({"type": "llm_text", "text": "好的，百变这就去休息啦。随时叫我，拜拜！"})
+                await self.tts.start_session(self.current_voice)
+                if self.tts.qwen_tts:
+                    self.audio_task = asyncio.create_task(self._audio_sender())
+                    await self.tts.send_text("好的，百变这就去休息啦。随时叫我，拜拜！")
+                    await self.tts.finish_session()
+                    await self.audio_task
+            except asyncio.CancelledError: pass
 
         await self.ws.send_json({"type": "shutdown"})
         self.state = "SLEEPING"

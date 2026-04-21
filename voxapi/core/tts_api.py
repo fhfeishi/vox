@@ -93,8 +93,8 @@ class TTSEngine:
                 },
             }
             headers = {"Authorization": f"Bearer {settings.dashscope_api_key}", "Content-Type": "application/json"}
-            resp = await asyncio.to_thread(requests.post, url, json=payload, headers=headers, timeout=60)
-
+            resp = await asyncio.to_thread(requests.post, url, json=payload, headers=headers, timeout=15)
+            logger.info(f"🔄 [TTS] 克隆请求响应: {resp.text}")
             if resp.status_code == 200:
                 data = resp.json()
                 output = data.get("output", {})
