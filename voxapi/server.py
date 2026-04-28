@@ -9,11 +9,9 @@ from voxapi.pipeline import SessionPipeline
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.success("🚀 VOX Backend Phase 4: 实时流式 TTS 管线已启动！")
+    logger.success("🚀 VOX 实时流式 TTS 管线已启动！")
     logger.info("👉 监听地址: ws://0.0.0.0:8000/ws/chat")
-    
-    # 💡 注意：由于升级了 QwenTtsRealtime 极速引擎，这里不再需要 preload_refs 预热
-    
+
     yield
     logger.warning("🛑 VOX Backend 正在关闭...")
 

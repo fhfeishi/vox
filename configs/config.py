@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # ------ asr  -----------
     ## paraformer
     paraformer_path: str=""
+    ## fsmn vad
+    fsmn_vad_path: str=""
+
     # ------ tts  ------------
     ## voxcpm
     voxcpm2_path : str=""
