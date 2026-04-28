@@ -3,7 +3,7 @@
 from audiopipeline import voice_ffmpeg, voice_editor, voice_clone, voice_asr_processor
 import os
 
-res_root: str = "./temp"
+res_root: str = "audiopipeline/temp"
 
 
 def main():

@@ -12,7 +12,8 @@ def get_cloner(model_dir: str):
     global _CLONE_MODEL
     if _CLONE_MODEL is None:
         logger.info(f"⏳ 正在加载 VoxCPM v2: {model_dir}")
-        _CLONE_MODEL = VoxCPM.from_pretrained(model_dir, load_denoiser=True)
+        # _CLONE_MODEL = VoxCPM.from_pretrained(model_dir, load_denoiser=False)
+        _CLONE_MODEL = VoxCPM.from_pretrained(model_dir)
     return _CLONE_MODEL
 
 
@@ -36,3 +37,16 @@ def generate_voice(text: str, ref_wav: str, save_path: str, model_dir: str):
 
     logger.success(f"🎙️ AI 音频(48kHz)已生成: {save_path}")
     return save_path
+
+
+if __name__ == '__main__':
+    from configs.config import settings
+    vox_path = settings.voxcpm15_path
+    # vox_path = "mlx-community/VoxCPM2-8bit"
+    model_ = get_cloner(vox_path)
+
+
+
+
+
+

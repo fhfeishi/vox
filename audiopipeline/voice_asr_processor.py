@@ -1,45 +1,38 @@
-# audiopipeline/scripts/task_auto_replace.py
-import os
-import sys
+# audiopipeline/voice_asr_processor.py
+from funasr import AutoModel
+from loguru import logger
 
-from audiopipeline import voice_ffmpeg, voice_editor, voice_clone, voice_asr_processor
-
-# --- 配置区 ---
-VIDEO_IN = "../temp/bad_interview.mp4"
-OLD_TEXT = "我觉得这个项目不太行"
-NEW_TEXT = "我觉得这个项目大有可为"
-MODEL_DIR = "你的/voxcpm-v2/路径"
-TEMP_DIR = "../temp"
-OUT_VIDEO = "../temp/good_interview.mp4"
+_ASR_MODEL = None
 
 
-# -------------
-
-def main():
-    # 1. 拆解视听
-    v_raw, a_16k = voice_ffmpeg.extract_assets(VIDEO_IN, TEMP_DIR)
-
-    # 2. 定位旧台词的时间戳
-    start_ms, end_ms = voice_asr_processor.find_target_time(a_16k, OLD_TEXT)
-    if start_ms is None: return
-
-    # 3. 从原音频中榨取至少 5s 的纯净人声，供大模型克隆使用
-    ref_hq = os.path.join(TEMP_DIR, "ref_hq.wav")
-    voice_editor.extract_pure_speech(a_16k, ref_hq)
-
-    # 4. 生成 48k 新台词
-    gen_48k = os.path.join(TEMP_DIR, "generated_48k.wav")
-    voice_clone.generate_voice(NEW_TEXT, ref_hq, gen_48k, MODEL_DIR)
-
-    # 5. 音频手术缝合 (将生成的 48k 音频嵌入，并统一输出为 48k)
-    final_audio = os.path.join(TEMP_DIR, "final_audio.wav")
-    voice_editor.replace_segment(a_16k, gen_48k, start_ms, end_ms, final_audio)
-
-    # 6. 合并最终视频
-    voice_ffmpeg.merge_final(v_raw, final_audio, OUT_VIDEO)
-
-    print("✅ 自动化魔法替换完毕！")
+def get_asr():
+    global _ASR_MODEL
+    if _ASR_MODEL is None:
+        _ASR_MODEL = AutoModel(model="paraformer-zh", vad_model="fsmn-vad", punc_model="ct-punc", device="cpu")
+    return _ASR_MODEL
 
 
-if __name__ == "__main__":
-    main()
+def find_target_time(audio_path: str, target_phrase: str):
+    """识别音频并返回要替换句子的 start_ms 和 end_ms"""
+    logger.info(f"🔍 正在音频中定位: '{target_phrase}'")
+    res = get_asr().generate(input=audio_path, batch_size_s=300)
+
+    if not res: return None, None
+
+    text_no_punc = res[0].get('text', '').replace('，', '').replace('。', '').replace('？', '')
+    timestamps = res[0].get('timestamp', [])
+
+    target_no_punc = target_phrase.replace('，', '').replace('。', '').replace('？', '')
+    start_idx = text_no_punc.find(target_no_punc)
+
+    if start_idx == -1:
+        logger.error("❌ 音频中未找到该句话！")
+        return None, None
+
+    end_idx = start_idx + len(target_no_punc) - 1
+
+    start_ms = timestamps[start_idx][0]
+    end_ms = timestamps[end_idx][1]
+
+    logger.info(f"🎯 找到替换区间: {start_ms}ms -> {end_ms}ms")
+    return start_ms, end_ms
